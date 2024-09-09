@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GIS - RELAWAN BAJANG TASTURA RUSLAN NORMAL</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <!-- Custom CSS -->
+    <style>
+        html, body, #map {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        .leaflet-popup-content > table img {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Sanity Client -->
+    <script type="module">
+        import { createClient } from 'https://cdn.skypack.dev/@sanity/client';
+
+        // Initialize Sanity client
+        const client = createClient({
+            projectId: 'ln9ujpru', // Replace with your Sanity project ID
+            dataset: 'production', // Replace with your Sanity dataset name
+            useCdn: true, // Use the Content Delivery Network (CDN) for cached responses
+            apiVersion: '2023-05-03' // Specify the API version
+        });
+
+        // Function to fetch data from Sanity
+        async function fetchData() {
+            try {
+                const query = '*[_type == "data-kunjungan-ruslan"]{_id, namaKegiatan, date, province, regency, district, village, pic, jumlahPeserta, aspirasi, keterangan, fotoEksternal, "foto": foto.asset->url, geometry, user-> {name}}';
+                const data = await client.fetch(query);
+                console.log('Fetched data pemasangan:', data);
+                return data; // Return the fetched data
+            } catch (error) {
+                console.error('Error fetching data pemasangan:', error);
+                return null; // Handle errors gracefully
+            }
+        }
+
+        // Function to get name by ID from provided list
+        function getNameById(id, list) {
+            console.log('Searching for ID:', id);
+            console.log('List:', list);
+            
+            // Ensure the list and ID are in the correct format
+            if (!Array.isArray(list)) {
+                console.error('List is not an array:', list);
+                return 'Not Found';
+            }
+            
+            const item = list.find(item => item.id === id);
+            console.log('Found item:', item);
+            return item ? item.name : 'Not Found';
+        }
+
+        // Function to fetch geography data based on IDs
+        async function fetchGeographyData(ids) {
+            try {
+                // Fetch provinces
+                const provincesResponse = await fetch('https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json');
+                const provinces = await provincesResponse.json();
+                console.log('Provinces:', provinces);
+
+                // Extract unique province IDs from the provided list
+                const provinceIds = [...new Set(ids.map(item => item.province))];
+                console.log('Province IDs:', provinceIds);
+                
+                // Fetch regencies for unique province IDs
+                const regenciesResponses = await Promise.all(provinceIds.map(id =>
+                    fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${id}.json`)
+                ));
+                const regenciesData = await Promise.all(regenciesResponses.map(res => res.json()));
+                const regencies = regenciesData.flat();
+                console.log('Regencies:', regencies);
+
+                // Extract unique regency IDs from the list
+                const regencyIds = [...new Set(ids.map(item => item.regency))];
+                console.log('Regency IDs:', regencyIds);
+                
+                // Fetch districts for unique regency IDs
+                const districtsResponses = await Promise.all(regencyIds.map(id =>
+                    fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/districts/${id}.json`)
+                ));
+                const districtsData = await Promise.all(districtsResponses.map(res => res.json()));
+                const districts = districtsData.flat();
+                console.log('Districts:', districts);
+
+                // Extract unique district IDs from the list
+                const districtIds = [...new Set(ids.map(item => item.district))];
+                console.log('District IDs:', districtIds);
+                
+                // Fetch villages for unique district IDs
+                const villagesResponses = await Promise.all(districtIds.map(id =>
+                    fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/villages/${id}.json`)
+                ));
+                const villagesData = await Promise.all(villagesResponses.map(res => res.json()));
+                const villages = villagesData.flat();
+                console.log('Villages:', villages);
+
+                return { provinces, regencies, districts, villages };
+            } catch (error) {
+                console.error('Error fetching geography data:', error);
+                return { provinces: [], regencies: [], districts: [], villages: [] };
+            }
+        }
+
+        // Function to initialize Leaflet map with fetched data
+        async function initializeMap() {
+            const data = await fetchData(); // Fetch data pemasangan
+
+            if (!data || data.length === 0) {
+                console.error('Failed to fetch data');
+                return;
+            }
+
+            // Extract IDs from the fetched data
+            const ids = data.map(item => ({
+                province: item.province,
+                regency: item.regency,
+                district: item.district,
+                village: item.village
+            }));
+            console.log('IDs:', ids);
+
+            // Fetch dynamic geography data based on IDs
+            const { provinces, regencies, districts, villages } = await fetchGeographyData(ids);
+
+            // Function to get name by ID from provided list
+            function getNameById(id, list) {
+                console.log('Searching for ID:', id);
+                console.log('List:', list);
+                const item = list.find(item => item.id === id);
+                console.log('Found item:', item);
+                return item ? item.name : 'Not Found';
+            }
+
+            // Prepare GeoJSON features array
+            const geoJsonFeatures = data.map(item => ({
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [item.geometry.lng, item.geometry.lat]
+                },
+                properties: {
+                    _id: item._id,
+                    namaKegiatan: item.namaKegiatan,
+                    province: getNameById(item.province, provinces),
+                    regency: getNameById(item.regency, regencies),
+                    district: getNameById(item.district, districts),
+                    village: getNameById(item.village, villages),
+                    pic: item.pic,
+                    jumlahPeserta: item.jumlahPeserta,
+                    aspirasi: item.aspirasi,
+                    keterangan: item.keterangan,
+                    date: item.date,
+                    foto: item.fotoEksternal,
+                    user: item.user ? item.user.name : ''
+                }
+            }));
+
+            // Initialize Leaflet map
+            var map = L.map('map').setView([-8.686231, 116.106701], 13);
+
+            // Add OpenStreetMap as base layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Create GeoJSON layer and add it to map
+            L.geoJSON({
+                type: 'FeatureCollection',
+                features: geoJsonFeatures
+            }, {
+                onEachFeature: onEachFeature,
+                pointToLayer: function (feature, latlng) {
+                    return L.circleMarker(latlng, styleFeature(feature));
+                }
+            }).addTo(map);
+
+            // Fit map to bounds of GeoJSON data
+            map.fitBounds(L.geoJSON({
+                type: 'FeatureCollection',
+                features: geoJsonFeatures
+            }).getBounds());
+        }
+
+        // Function to create popups for each feature
+        function onEachFeature(feature, layer) {
+            const dateStr = feature.properties.date;
+            const dateObj = new Date(dateStr);
+            const options = {
+                timeZone: 'Asia/Makassar', // Zona waktu untuk WITA
+                weekday: 'long',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                // hour: '2-digit',
+                // minute: '2-digit',
+                // second: '2-digit',
+            };
+            const formattedDate = new Intl.DateTimeFormat('id-ID', options).format(dateObj);
+            if (feature.properties) {
+                var popupContent = `<table style="width: 100%; border-collapse: collapse; text-align: left;">
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Nama Relawan</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.user}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Lokasi</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.village}, ${feature.properties.district}, ${feature.properties.regency}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Waktu</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${formattedDate}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Nama Kegiatan</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.namaKegiatan}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">PIC</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.pic}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Jumlah Peserta</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.jumlahPeserta}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Aspirasi</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.aspirasi}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Keterangan</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.keterangan}</td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 8px; border: 1px solid #ddd;">Foto</th>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${feature.properties.foto ? '<img src="' + feature.properties.foto + '" style="max-width: 100%; height: auto;">' : ''}</td>
+                    </tr>
+                </table>`;
+                layer.bindPopup(popupContent);
+            }
+        }
+
+        // Function to style features
+        function styleFeature(feature) {
+            return {
+                radius: 8,
+                fillColor: '#ff7800',
+                color: '#000',
+                weight: 1,
+                opacity: 1,
+                fillOpacity: 0.8
+            };
+        }
+
+        // Call initializeMap function when DOM is fully loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeMap();
+        });
+    </script>
+</body>
+</html>
